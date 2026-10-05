@@ -63,6 +63,9 @@ CONTACT_REPEAT_DELAY_S = 0.045
 #: Closing the HID service immediately after the release cancels the gesture
 #: before it reaches the phone.
 GESTURE_FLUSH_S = 0.25
+#: Spacing between keyboard reports. Below roughly 20 ms the device starts
+#: dropping them, which strands modifiers in the pressed state.
+KEY_REPORT_DELAY_S = 0.025
 
 
 class DeviceError(Exception):
@@ -320,17 +323,28 @@ async def _type_text(text: str) -> int:
 
     async def play(service):
         keyboard = await _maybe(service.create_keyboard_service())
+
+        async def report(codes) -> None:
+            await _maybe(service.send_keyboard(keyboard, codes))
+            await asyncio.sleep(KEY_REPORT_DELAY_S)
+
         typed = 0
         for char in text:
             mapping = ASCII_TO_HID.get(char)
             if mapping is None:
                 continue
             usage, needs_shift = mapping
-            codes = ([KEY_LEFT_SHIFT] if needs_shift else []) + [usage]
-            await _maybe(service.send_keyboard(keyboard, codes))
-            await asyncio.sleep(0.012)
-            await _maybe(service.send_keyboard(keyboard, []))
-            await asyncio.sleep(0.012)
+            if needs_shift:
+                # Shift has to land in its own report before the key: combined
+                # into a single one it is ignored, and held across characters
+                # it latches — the first shifted character then capitalises
+                # everything that follows and turns digits into symbols.
+                await report([KEY_LEFT_SHIFT])
+                await report([KEY_LEFT_SHIFT, usage])
+                await report([KEY_LEFT_SHIFT])
+            else:
+                await report([usage])
+            await report([])
             typed += 1
         return typed
 
