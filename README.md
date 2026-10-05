@@ -54,8 +54,8 @@ python3 -m venv .venv
 
 ## Configure your MCP client
 
-Point the client at the installed entry point. For Claude Code, in
-`~/.claude.json`:
+Point your client at the installed entry point. Most of them take a block of
+this shape in their configuration file:
 
 ```json
 {
@@ -69,7 +69,8 @@ Point the client at the installed entry point. For Claude Code, in
 }
 ```
 
-Any MCP client works the same way — the server speaks JSON-RPC 2.0 over stdio.
+The server speaks JSON-RPC 2.0 over stdio, so any MCP client can drive it. You
+can also run it as a module: `.venv/bin/python -m ios_control_mcp`.
 
 ## Tools
 
