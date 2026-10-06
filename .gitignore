@@ -1,13 +1,39 @@
-# Python
+# Python and build output
 __pycache__/
 *.py[cod]
 *.egg-info/
 build/
 dist/
+*.whl
 
-# Environments
+# Environments and tooling
 .venv/
 venv/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
 
-# macOS
+# Local device data and credentials
+*.pem
+*.key
+*.p12
+*.mobileprovision
+*.pairing
+pairing_records/
+screenshots/
+recordings/
+backups/
+*.log
+mcp.local.json
+
+# OS and editors
 .DS_Store
+.idea/
+.vscode/

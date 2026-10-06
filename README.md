@@ -1,161 +1,186 @@
 # ios-control-mcp
 
-An [MCP](https://modelcontextprotocol.io) server that lets a model see and drive
-a real iPhone from macOS — screenshots, taps, swipes, typing, hardware buttons
-and app launching — over the same CoreDevice transport Xcode uses.
+Control a real iPhone from an MCP client on macOS. Capture screenshots, tap and
+swipe, type text, press buttons, and open apps through Apple's CoreDevice
+services, using [pymobiledevice3](https://github.com/doronz88/pymobiledevice3).
 
-No companion app on the Mac, nothing installed on the phone, and no live mirror
-window. Works over USB or wirelessly.
+The server runs locally over **stdio**. It uses on-demand screenshots rather
+than a continuous mirror, and requires no companion iOS app. USB is preferred;
+Wi-Fi is available after pairing and enabling wireless connections.
 
-```
-iphone_screenshot  →  1320 × 2868, taken on demand
-iphone_tap         →  normalised coordinates, 0.0 – 1.0
-iphone_open_app    →  launched by bundle identifier
-```
-
-## Why screenshots instead of a live mirror
-
-The usual way to see an iPhone screen on a Mac is to capture it as a continuous
-video stream through CoreMediaIO — the device QuickTime offers as a camera.
-That path has a defect worth knowing about before you build on it: after a few
-minutes of sustained capture the device stops delivering frames, while the
-session keeps reporting itself as healthy. Callers then act on a frozen picture
-with no error to tell them apart.
-
-The condition cannot be recovered from inside the process. Reattaching the
-input, rebuilding the capture session from scratch and releasing every retained
-buffer all leave it frozen, and a minimal consumer that retains nothing
-reproduces it identically — so it is not a matter of how the frames are
-handled. Only a new process restores capture.
-
-Taking one screenshot at a time keeps no stream alive, so the failure cannot
-occur. Two details come for free: the capture is at native resolution rather
-than a downscaled video frame, and the status bar is the real one — screen
-recording substitutes a placeholder.
+**Status: beta.** Device services can change between iOS releases. Automated
+tests cover protocol handling and mocked device behavior; they do not establish
+compatibility with every iPhone or iOS version. See the
+[hardware validation checklist](docs/VALIDATION.md) before relying on a new setup.
 
 ## Requirements
 
-- macOS, with the `sips` command (ships with the system)
-- Python 3.10 or later
-- An iPhone that is **paired**, **unlocked**, and has **Developer Mode** enabled
-  (Settings → Privacy & Security → Developer Mode)
+- **macOS**, including the built-in `/usr/bin/sips` image converter.
+- **Python 3.10 or newer**. CI targets Python 3.10, 3.12, and 3.13.
+- An iPhone with **iOS 17 or newer**, paired with this Mac, unlocked, and with
+  **Developer Mode** enabled under Settings → Privacy & Security.
+- Working developer services on the device. Depending on iOS and the host setup,
+  developer disk image preparation may be necessary; consult the
+  [upstream device setup documentation](https://github.com/doronz88/pymobiledevice3).
 
-Developed and tested against iOS 27.2 on an iPhone 16 Pro Max. The CoreDevice
-transport requires iOS 17 or later; earlier versions are untested.
+The iOS version is a transport prerequisite, not a promise that all tools work
+on every supported OS release. Linux and Windows device control are not supported
+by this project.
 
 ## Install
 
 ```bash
-git clone https://github.com/Als0m3/ios-control-mcp.git
+git clone https://github.com/als0m3/ios-control-mcp.git
 cd ios-control-mcp
 python3 -m venv .venv
-.venv/bin/pip install .
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install .
 ```
 
-## Configure your MCP client
+Connect the iPhone with a cable, unlock it, and accept the trust prompt if shown.
+Enable Developer Mode and complete any restart or confirmation requested by iOS.
 
-Point your client at the installed entry point. Most of them take a block of
-this shape in their configuration file:
+## Connect an MCP client
+
+Add a stdio server to your client's MCP configuration, using the **absolute**
+path to the installed executable:
 
 ```json
 {
   "mcpServers": {
     "ios-control": {
-      "type": "stdio",
       "command": "/absolute/path/to/ios-control-mcp/.venv/bin/ios-control-mcp",
-      "args": []
+      "args": [],
+      "env": {
+        "IOS_CONTROL_TRANSPORT": "usb"
+      }
     }
   }
 }
 ```
 
-The server speaks JSON-RPC 2.0 over stdio, so any MCP client can drive it. You
-can also run it as a module: `.venv/bin/python -m ios_control_mcp`.
+Configuration formats differ between clients; some also require `"type": "stdio"`.
+Restart or reload the client after editing its configuration. The equivalent
+module entry point is `.venv/bin/python -m ios_control_mcp`.
+
+Start with `iphone_status`, then `iphone_screenshot`. The process waits for
+newline-delimited JSON-RPC input when launched directly in a terminal; it does
+not open a window or provide an interactive command prompt.
 
 ## Tools
 
-| Tool | Arguments | Notes |
+All coordinates are **normalized**, from `0.0` to `1.0`: the top-left corner is
+`(0, 0)` and the center is `(0.5, 0.5)`. Measure against a recent screenshot.
+Pixel coordinates, incorrect types, unknown arguments, and values outside the
+published limits are rejected before any device operation.
+
+| Tool | Arguments | Behavior |
 | --- | --- | --- |
-| `iphone_status` | — | Name, iOS version, model, available transports |
-| `iphone_screenshot` | `max_width` | JPEG, downscaled from the native capture |
-| `iphone_tap` | `x`, `y`, `hold_ms` | Coordinates 0.0 – 1.0 |
-| `iphone_swipe` | `x`, `y`, `x1`, `y1`, `ms` | Coordinates 0.0 – 1.0 |
-| `iphone_type` | `text` | ASCII only; types into the focused field |
-| `iphone_button` | `name` | `home`, `lock`, `volume-up`, `volume-down`, `mute`, `siri` |
-| `iphone_open_app` | `app` | Display name or bundle identifier |
-| `iphone_list_apps` | `contains` | Installed apps with bundle identifiers |
-| `iphone_wait` | `ms` | Let an animation settle before the next capture |
+| `iphone_status` | None | iOS version, build, model, available transports, tunnel state; omits the device name and UDID |
+| `iphone_screenshot` | `max_width`: 200–1400, default 900 | Returns a JPEG resized to the requested width; falls back to PNG if conversion fails |
+| `iphone_tap` | Required `x`, `y`; `hold_ms`: 0–10000, default 120 | Touch and release; contact lasts at least 100 ms |
+| `iphone_swipe` | Required `x`, `y`, `x1`, `y1`; `ms`: 120–10000, default 300 | Interpolated drag; requested duration excludes contact and flush delays |
+| `iphone_type` | Required `text`: 1–1000 characters | Printable ASCII, tab, and newline using a US keyboard mapping; rejects unsupported characters before typing |
+| `iphone_button` | Required `name` | `home`, `lock`, `volume-up`, `volume-down`, `mute`, or `siri` |
+| `iphone_open_app` | Required `app`: 1–255 characters | Exact bundle ID, exact display name, or unique partial name; ambiguous matches are rejected |
+| `iphone_list_apps` | Optional `contains`: up to 255 characters | Lists app names and bundle IDs; filter matches either field |
+| `iphone_wait` | `ms`: 0–10000, default 500 | Waits before the next operation |
 
-### Coordinates
+Example arguments:
 
-Touch coordinates are **normalised from 0.0 to 1.0**, not pixels: `x = 0.5` is
-the horizontal centre whatever the device. Passing pixel values is rejected with
-an explicit message rather than silently tapping the corner.
+```json
+{"x": 0.5, "y": 0.5}
+```
 
-### Gestures near the bottom edge
+```json
+{"x": 0.5, "y": 0.75, "x1": 0.5, "y1": 0.25, "ms": 400}
+```
 
-A swipe that starts at the very bottom of the screen is read by iOS as the home
-gesture and leaves the current app. Start above `y = 0.9` to stay inside it.
+```json
+{"app": "com.apple.Preferences"}
+```
 
-## Wireless
+A swipe beginning at the bottom edge can trigger the Home gesture. For scrolling
+inside an app, start at `y < 0.9`. Keyboard layout, orientation, lock state, and
+system dialogs can affect input. Newline may submit a form; tab may move focus.
 
-Enable wireless connections once, with the device plugged in:
+Opening an app does not request termination of an already running instance.
+Allow time for launch animations, then take another screenshot to verify the
+result. A successful tool response confirms the request completed, not that the
+screen reached the intended state.
+
+## Device selection and configuration
+
+| Environment variable | Meaning |
+| --- | --- |
+| `IOS_CONTROL_UDID` | Select one specific device. If it is absent, the call fails instead of controlling another device. |
+| `IOS_CONTROL_TRANSPORT` | `usb` or `wifi`. If unset, prefer USB and use the network when USB is unavailable. |
+| `IOS_CONTROL_TIMEOUT` | Base device-call timeout in seconds, from 1 to 300; default 60. Typing and swiping add a bounded duration allowance. |
+
+With multiple devices attached, set `IOS_CONTROL_UDID`. With one device, the
+server remembers its selection until restart. Keep actual UDIDs in local client
+configuration, not in committed files or public issue reports.
+
+Requests run sequentially. Screenshots and app listing can reconnect and retry
+once after a connection failure. Input and app launching are **never automatically
+replayed**. A timeout or connection error may mean an action partially completed;
+inspect the screen before retrying it. Client cancellation notifications are not
+processed during an in-flight call; configured timeouts bound device operations.
+
+## Wi-Fi
+
+With only the intended iPhone attached by USB, enable wireless connections:
 
 ```bash
 .venv/bin/python -m pymobiledevice3 lockdown wifi-connections on
 ```
 
-This is the same setting as *Show this iPhone when on Wi-Fi* in the Finder, and
-it is reversible with `off`. The phone then appears over both transports; USB is
-preferred automatically and the network is used when no cable is attached.
+Keep the Mac and iPhone on the same trusted network. Unset
+`IOS_CONTROL_TRANSPORT` for USB preference with network fallback, or set it to
+`wifi` to require a network connection. The phone must remain unlocked and
+reachable. To disable wireless connections, reconnect over USB and run the
+command with `off` instead of `on`.
 
-Expect roughly 2.3 s per screenshot over the network against 1.6 s over USB. The
-tunnel is opened once and reused, so the difference is image transfer alone.
+## Privacy and security
 
-Keep in mind that the phone must stay unlocked, which is more demanding
-wirelessly since it is not charging.
+This server can read the visible screen and send input to the foreground app.
+Only connect trusted MCP clients and keep their tool approval controls enabled
+for consequential actions. Screenshots can include messages, credentials, and
+other private content; the MCP client may send tool results to its model provider.
 
-## Configuration
-
-| Variable | Effect |
-| --- | --- |
-| `IOS_CONTROL_UDID` | Pin a device when several are attached |
-| `IOS_CONTROL_TRANSPORT` | `usb` or `wifi`; defaults to USB with network fallback |
-| `IOS_CONTROL_TIMEOUT` | Per-call timeout in seconds (default 60) |
+The server has no telemetry or HTTP listener. It sends tool results over local
+stdio and communicates with the paired device. Image conversion uses temporary
+files removed when conversion finishes normally; abrupt process termination can
+leave files behind. The dependency manages pairing records and may download
+developer support assets. Client logs and dependency diagnostics can contain
+private information. See [SECURITY.md](SECURITY.md) before sharing a report.
 
 ## Troubleshooting
 
-**“No iPhone found.”** Plug the device in and unlock it. If it has never been
-paired with this Mac, accept the trust prompt on the phone first.
+| Symptom | What to check |
+| --- | --- |
+| No iPhone found | Cable, unlock state, trust pairing, and Developer Mode. For Wi-Fi, check wireless pairing and the network. |
+| Selected device unavailable | Check `IOS_CONTROL_UDID` and transport. Restart the server to deliberately select a different phone. |
+| Multiple devices found | Set `IOS_CONTROL_UDID` explicitly. |
+| Developer service or tunnel error | Confirm developer services are ready, check upstream setup requirements, and restart the client after fixing the connection. |
+| Input completes but nothing changes | Confirm focus, normalized coordinates, keyboard layout, and absence of a blocking system dialog. |
+| Typing rejects text | Use printable ASCII, tab, or newline. Unsupported text is rejected as a whole. |
+| App name is ambiguous | Use the exact bundle ID returned by `iphone_list_apps`. |
+| Device action times out | Inspect the current screen before retrying; the action may already have partly completed. |
+| Client cannot start the server | Check its absolute executable path and environment variables. Inspect stderr locally; redact before sharing. |
 
-**Taps return `ok` but nothing happens.** Check the coordinates are normalised.
-A value above 1.0 is rejected, but a plausible-looking wrong value is not — take
-a screenshot and measure against it.
+## Development
 
-**Nothing happens after `iphone_open_app`.** A cold start takes a moment; wait
-two to three seconds before the next screenshot.
-
-**Calls fail after the device has been idle.** The first call rebuilds the
-tunnel, which can take a few seconds. The server retries once on its own.
-
-## How it works
-
-The server holds one `UserspaceRsdTunnel` to the device and opens a CoreDevice
-service per call:
-
-- `ScreenCaptureService` for screenshots
-- `UniversalHIDServiceService` for touch and keyboard
-- `IndigoHIDService` for hardware buttons
-- `AppServiceService` for launching and listing apps
-
-Two details matter for input to land reliably. A lone touch report is discarded
-by the digitizer as a spurious reading, so the initial contact is sent twice;
-and closing the HID service immediately after the release cancels the gesture
-before it reaches the phone, so the service is held briefly open.
-
-All device work runs on an asyncio loop in a daemon thread, since the MCP loop
-itself is synchronous. A dropped link is retried once on a fresh tunnel.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and checks,
+[architecture](docs/ARCHITECTURE.md) for the transport design, and
+[CHANGELOG.md](CHANGELOG.md) for behavior changes.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+The code in this repository is licensed under the [MIT License](LICENSE).
+Dependencies retain their own licenses. In particular,
+[pymobiledevice3](https://github.com/doronz88/pymobiledevice3/blob/master/LICENSE)
+is GPL-3.0-or-later; the MIT license here does not relicense that dependency.
+Review third-party license obligations when redistributing a combined package.
+
+This is an independent project, not affiliated with or endorsed by Apple.

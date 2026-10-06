@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,7 +7,8 @@ name = "ios-control-mcp"
 version = "1.0.0"
 description = "MCP server to screenshot and control an iPhone from macOS over CoreDevice"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Als0m3" }]
 keywords = ["mcp", "ios", "iphone", "automation", "coredevice", "pymobiledevice3"]
@@ -15,22 +16,49 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Testing",
 ]
 dependencies = ["pymobiledevice3>=11.23,<12"]
 
 [project.urls]
-Homepage = "https://github.com/Als0m3/ios-control-mcp"
-Issues = "https://github.com/Als0m3/ios-control-mcp/issues"
+Homepage = "https://github.com/als0m3/ios-control-mcp"
+Issues = "https://github.com/als0m3/ios-control-mcp/issues"
 
 [project.scripts]
 ios-control-mcp = "ios_control_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ios_control_mcp"]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2,<2",
+    "detect-secrets>=1.5,<2",
+    "pip-audit>=2.7,<3",
+    "mcp>=1.9,<3",
+    "pytest>=8,<10",
+    "pytest-asyncio>=0.24,<2",
+    "ruff>=0.11,<0.17",
+    "twine>=6,<8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/", "tests/", "scripts/", "docs/", "*.md", "LICENSE", "pyproject.toml", ".github/", ".gitignore"]
