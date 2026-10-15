@@ -129,12 +129,55 @@ async def test_cancellation_invalidates_tunnel(monkeypatch):
     service.close.assert_awaited_once()
 
 
-async def test_unsupported_text_rejected_before_service(monkeypatch):
-    service = AsyncMock()
-    monkeypatch.setattr(server, "_with_service", service)
-    with pytest.raises(server.DeviceError, match="nothing was typed"):
-        await server._type_text("hello é")
-    service.assert_not_awaited()
+def fake_services(monkeypatch, pasteboard_text="previous text"):
+    """Route _with_service to a fake pasteboard and keyboard; return their call logs."""
+    from pymobiledevice3.remote.core_device.pasteboard_service import text_item
+
+    pasted, chords = [], []
+    pasteboard = SimpleNamespace(
+        get=AsyncMock(
+            return_value={"pasteboard": {"items": [text_item(pasteboard_text)]}}
+            if pasteboard_text is not None
+            else {"pasteboard": {"items": []}}
+        ),
+        set_text=AsyncMock(side_effect=pasted.append),
+    )
+    keyboard = SimpleNamespace(
+        create_keyboard_service=AsyncMock(return_value=1),
+        send_keyboard=AsyncMock(side_effect=lambda _, codes: chords.append(list(codes))),
+    )
+
+    async def with_service(factory, action, **_kwargs):
+        name = factory.__name__
+        return await action(pasteboard if name == "PasteboardService" else keyboard)
+
+    monkeypatch.setattr(server, "_with_service", with_service)
+    monkeypatch.setattr(server, "KEY_REPORT_DELAY_S", 0)
+    monkeypatch.setattr(server, "PASTE_SETTLE_S", 0)
+    return pasted, chords
+
+
+async def test_ascii_text_is_typed_without_touching_pasteboard(monkeypatch):
+    pasted, chords = fake_services(monkeypatch)
+    assert await server._type_text("Hi") == (2, "keys")
+    assert pasted == []
+    assert [server.KEY_LEFT_SHIFT] in chords
+
+
+async def test_unicode_text_is_pasted_and_pasteboard_restored(monkeypatch):
+    from pymobiledevice3.remote.core_device.hid_service import ASCII_TO_HID
+
+    pasted, chords = fake_services(monkeypatch)
+    assert await server._type_text("Merci, à demain ! 👋") == (19, "paste")
+    assert pasted == ["Merci, à demain ! 👋", "previous text"]
+    assert [server.KEY_LEFT_GUI, ASCII_TO_HID["v"][0]] in chords
+    assert chords[-1] == []
+
+
+async def test_pasteboard_without_text_is_not_restored(monkeypatch):
+    pasted, _ = fake_services(monkeypatch, pasteboard_text=None)
+    await server._type_text("é")
+    assert pasted == ["é"]
 
 
 async def test_keyboard_releases_shift_after_failure(monkeypatch):
@@ -332,3 +375,51 @@ def test_real_macos_image_conversion():
     with Image.open(io.BytesIO(data)) as converted:
         assert converted.size == (200, 400)
         assert converted.format == "JPEG"
+
+
+async def test_devices_are_described_without_names(monkeypatch):
+    from pymobiledevice3 import lockdown
+
+    devices(
+        monkeypatch, [("new", "USB"), ("new", "Network"), ("old", "Network"), ("locked", "USB")]
+    )
+    values = {
+        "new": {"ProductVersion": "27.2", "ProductType": "iPhone99,1", "DeviceName": "PRIVATE"},
+        "old": {"ProductVersion": "26.4", "ProductType": "iPad99,1"},
+    }
+
+    async def create(serial, connection_type):
+        if serial == "locked":
+            raise ConnectionRefusedError()
+        return SimpleNamespace(
+            all_values=values[serial],
+            get_developer_mode_status=AsyncMock(return_value=True),
+            get_enable_wifi_connections=AsyncMock(side_effect=OSError()),
+            close=AsyncMock(),
+        )
+
+    monkeypatch.setattr(lockdown, "create_using_usbmux", create)
+    described = {entry["udid"]: entry for entry in await server._describe_devices()}
+    assert "PRIVATE" not in json.dumps(described)
+    assert described["new"]["transports"] == ["Network", "USB"]
+    assert described["new"]["controllable"] is True
+    assert described["new"]["wifi_connections"] is None
+    assert described["old"]["controllable"] is True
+    assert described["locked"] == {
+        "udid": "locked",
+        "transports": ["USB"],
+        "reachable": False,
+        "problem": "ConnectionRefusedError",
+        "controllable": False,
+    }
+
+
+async def test_wifi_connections_use_selected_device(monkeypatch):
+    from pymobiledevice3 import lockdown
+
+    devices(monkeypatch, [("one", "USB")])
+    client = SimpleNamespace(set_enable_wifi_connections=AsyncMock(), close=AsyncMock())
+    monkeypatch.setattr(lockdown, "create_using_usbmux", AsyncMock(return_value=client))
+    await server._set_wifi_connections(True)
+    client.set_enable_wifi_connections.assert_awaited_once_with(True)
+    client.close.assert_awaited_once()

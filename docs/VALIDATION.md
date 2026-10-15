@@ -10,7 +10,7 @@ version, device model, and transport. Do not record device names, serials, UDIDs
 pairing records, or screenshots of personal data.
 
 1. Connect over USB, unlock, trust the Mac, and enable Developer Mode.
-2. Initialize through an MCP client and confirm all nine tools are listed.
+2. Initialize through an MCP client and confirm all eleven tools are listed.
 3. Read status and verify it matches the intended phone without exposing its name
    or UDID. With two devices, confirm selection requires `IOS_CONTROL_UDID`.
 4. Capture the screen at widths 200, 900, and 1400. Check MIME type, readable

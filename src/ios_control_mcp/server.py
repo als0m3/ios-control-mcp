@@ -19,7 +19,7 @@ import time
 __all__ = ["main"]
 
 SERVER_NAME = "ios-control"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = "1.1.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 #: Select a device explicitly when more than one is attached.
@@ -58,6 +58,7 @@ BUTTON_HOLD_S = {"lock": 0.5, "siri": 1.0}
 DEFAULT_BUTTON_HOLD_S = 0.05
 
 KEY_LEFT_SHIFT = 0xE1
+KEY_LEFT_GUI = 0xE3
 DIGITIZER_MAX = 65535
 
 #: A lone touch report is discarded by the digitizer as a spurious reading, so
@@ -69,6 +70,8 @@ GESTURE_FLUSH_S = 0.25
 #: Spacing between keyboard reports. Below roughly 20 ms the device starts
 #: dropping them, which strands modifiers in the pressed state.
 KEY_REPORT_DELAY_S = 0.025
+#: Time for the focused app to read the pasteboard before it is restored.
+PASTE_SETTLE_S = 0.4
 
 
 class DeviceError(Exception):
@@ -401,16 +404,9 @@ async def _touch_path(points: list[tuple[int, int]], hold_s: float) -> None:
     await _with_service(UniversalHIDServiceService, play)
 
 
-async def _type_text(text: str) -> int:
-    from pymobiledevice3.remote.core_device.hid_service import (
-        ASCII_TO_HID,
-        UniversalHIDServiceService,
-    )
-
-    if any(char not in ASCII_TO_HID for char in text):
-        raise DeviceError(
-            "Unsupported character. Use printable ASCII, tab or newline; nothing was typed."
-        )
+async def _send_keys(chords: list[list[int]]) -> None:
+    """Press each chord in turn, releasing every key between chords."""
+    from pymobiledevice3.remote.core_device.hid_service import UniversalHIDServiceService
 
     async def play(service):
         keyboard = await _maybe(service.create_keyboard_service())
@@ -420,23 +416,79 @@ async def _type_text(text: str) -> int:
             await asyncio.sleep(KEY_REPORT_DELAY_S)
 
         try:
-            for char in text:
-                usage, needs_shift = ASCII_TO_HID[char]
-                if needs_shift:
-                    # Separate shift reports prevent a latched modifier.
-                    await report([KEY_LEFT_SHIFT])
-                    await report([KEY_LEFT_SHIFT, usage])
-                    await report([KEY_LEFT_SHIFT])
-                else:
-                    await report([usage])
+            for chord in chords:
+                # Modifiers go down alone first, in separate reports, so that
+                # none of them stays latched.
+                modifiers = [code for code in chord if code >= 0xE0]
+                if modifiers:
+                    await report(modifiers)
+                await report(chord)
+                if modifiers:
+                    await report(modifiers)
                 await report([])
-            return len(text)
         finally:
             # Best effort, including on cancellation or a failed key report.
             with contextlib.suppress(Exception):
                 await report([])
 
-    return await _with_service(UniversalHIDServiceService, play)
+    await _with_service(UniversalHIDServiceService, play)
+
+
+async def _type_text(text: str) -> tuple[int, str]:
+    """Type ``text`` into the focused field; return ``(characters, method)``.
+
+    Printable ASCII is typed key by key. Anything else (accents, emoji, other
+    scripts) cannot be expressed as US keyboard usages, so it is pasted.
+    """
+    from pymobiledevice3.remote.core_device.hid_service import ASCII_TO_HID
+
+    if all(char in ASCII_TO_HID for char in text):
+        chords = []
+        for char in text:
+            usage, needs_shift = ASCII_TO_HID[char]
+            chords.append([KEY_LEFT_SHIFT, usage] if needs_shift else [usage])
+        await _send_keys(chords)
+        return len(text), "keys"
+    await _paste_text(text)
+    return len(text), "paste"
+
+
+async def _paste_text(text: str) -> None:
+    """Paste ``text`` with the device pasteboard and Command-V.
+
+    The pasteboard is restored afterwards when it held text. Other content
+    (an image, for instance) cannot be restored and is replaced.
+    """
+    from pymobiledevice3.remote.core_device.hid_service import ASCII_TO_HID
+    from pymobiledevice3.remote.core_device.pasteboard_service import (
+        POLICY_PROMISE_SECONDARY,
+        PasteboardService,
+        snapshot_text,
+    )
+
+    async def pull(service):
+        return snapshot_text(await _maybe(service.get(data_policy=POLICY_PROMISE_SECONDARY)))
+
+    def setter(value: str):
+        async def put(service):
+            await _maybe(service.set_text(value))
+
+        return put
+
+    # The pasteboard daemon answers one request per connection, which
+    # _with_service provides by opening a service for each call.
+    try:
+        previous = await _with_service(PasteboardService, pull, retry_safe=True)
+    except DeviceError:
+        previous = None
+    await _with_service(PasteboardService, setter(text))
+    try:
+        await _send_keys([[KEY_LEFT_GUI, ASCII_TO_HID["v"][0]]])
+        await asyncio.sleep(PASTE_SETTLE_S)
+    finally:
+        if previous is not None:
+            with contextlib.suppress(DeviceError):
+                await _with_service(PasteboardService, setter(previous))
 
 
 async def _press_button(name: str) -> None:
@@ -469,6 +521,67 @@ async def _device_info() -> dict:
     lockdown = await _maybe(create_using_usbmux(serial=serial, connection_type=connection_type))
     try:
         return await _maybe(lockdown.all_values)
+    finally:
+        await _maybe(lockdown.close())
+
+
+async def _describe_devices() -> list[dict]:
+    """Every attached device with what decides whether it can be driven."""
+    from pymobiledevice3.lockdown import create_using_usbmux
+    from pymobiledevice3.usbmux import list_devices
+
+    transports: dict[str, set[str]] = {}
+    for device in await _maybe(list_devices()):
+        transports.setdefault(device.serial, set()).add(_connection_kind(device))
+
+    described = []
+    for serial, kinds in transports.items():
+        entry = {"udid": serial, "transports": sorted(kinds), "reachable": False}
+        try:
+            lockdown = await _maybe(
+                create_using_usbmux(
+                    serial=serial, connection_type="USB" if "USB" in kinds else "Network"
+                )
+            )
+        except Exception as exc:
+            # Typically an unpaired device or a declined trust prompt.
+            entry["problem"] = type(exc).__name__
+        else:
+            try:
+                info = await _maybe(lockdown.all_values)
+                entry.update(
+                    reachable=True,
+                    ios=info.get("ProductVersion"),
+                    model=info.get("ProductType"),
+                    device_class=info.get("DeviceClass"),
+                )
+                for key, getter in (
+                    ("developer_mode", "get_developer_mode_status"),
+                    ("wifi_connections", "get_enable_wifi_connections"),
+                ):
+                    try:
+                        entry[key] = bool(await _maybe(getattr(lockdown, getter)()))
+                    except Exception:
+                        entry[key] = None
+            finally:
+                with contextlib.suppress(Exception):
+                    await _maybe(lockdown.close())
+        # Whether the input services are advertised is only known once a tunnel
+        # is open, so this is the precondition, not a guarantee.
+        entry["controllable"] = bool(entry["reachable"] and entry.get("developer_mode"))
+        described.append(entry)
+    return sorted(described, key=lambda entry: entry["udid"])
+
+
+async def _set_wifi_connections(enabled: bool) -> None:
+    from pymobiledevice3.lockdown import create_using_usbmux
+
+    global _selected_serial
+    serial, connection_type = await _pick_device()
+    _selected_serial = serial
+    lockdown = await _maybe(create_using_usbmux(serial=serial, connection_type=connection_type))
+    try:
+        await _maybe(lockdown.set_enable_wifi_connections(enabled))
     finally:
         await _maybe(lockdown.close())
 
@@ -541,8 +654,18 @@ def tool_swipe(arguments: dict) -> list[dict]:
 
 def tool_type(arguments: dict) -> list[dict]:
     text = str(arguments["text"])
-    typed = _run(_type_text(text), timeout=CALL_TIMEOUT_S + len(text) * 0.1)
-    return _text({"ok": True, "action": "type", "characters": typed})
+    typed, method = _run(_type_text(text), timeout=CALL_TIMEOUT_S + len(text) * 0.1)
+    return _text({"ok": True, "action": "type", "characters": typed, "method": method})
+
+
+def tool_list_devices(_arguments: dict) -> list[dict]:
+    return _text({"devices": _run(_describe_devices())})
+
+
+def tool_wifi(arguments: dict) -> list[dict]:
+    enabled = bool(arguments.get("enabled", True))
+    _run(_set_wifi_connections(enabled))
+    return _text({"ok": True, "action": "wifi_connections", "enabled": enabled})
 
 
 def tool_button(arguments: dict) -> list[dict]:
@@ -698,7 +821,11 @@ TOOLS = [
     },
     {
         "name": "iphone_type",
-        "description": "Type text into the focused field using a virtual keyboard. ASCII only.",
+        "description": (
+            "Type text into the focused field. Printable ASCII is typed with a virtual "
+            "keyboard; any other text (accents, emoji) is pasted through the device "
+            "pasteboard, which is restored afterwards when it held text."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 1000}},
@@ -754,6 +881,29 @@ TOOLS = [
             "additionalProperties": False,
         },
         "handler": tool_list_apps,
+    },
+    {
+        "name": "iphone_list_devices",
+        "description": (
+            "List every attached device with its UDID, transports, iOS version, model "
+            "and Developer Mode, and whether it meets the preconditions to be driven. "
+            "Does not open a tunnel or select a device."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "handler": tool_list_devices,
+    },
+    {
+        "name": "iphone_wifi_connections",
+        "description": (
+            "Allow (or forbid) connecting to the selected device over the network. "
+            "Run once while it is plugged in over USB."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"enabled": {"type": "boolean", "description": "Default true."}},
+            "additionalProperties": False,
+        },
+        "handler": tool_wifi,
     },
     {
         "name": "iphone_wait",
@@ -813,6 +963,7 @@ def _validate_arguments(name: str, arguments) -> dict:
             (kind == "string" and isinstance(value, str))
             or (kind == "integer" and type(value) is int)
             or (kind == "number" and type(value) in (int, float))
+            or (kind == "boolean" and type(value) is bool)
         )
         if not valid:
             raise DeviceError(f"Invalid type for {key}; expected {kind}.")
@@ -821,7 +972,7 @@ def _validate_arguments(name: str, arguments) -> dict:
                 "minimum", -math.inf
             ) <= value <= spec.get("maximum", math.inf):
                 raise DeviceError(f"{key} is outside the supported range.")
-        else:
+        elif kind == "string":
             if (
                 not spec.get("minLength", 0)
                 <= len(value)

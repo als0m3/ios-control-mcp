@@ -19,6 +19,6 @@ async def test_official_client_round_trip():
             waited = await session.call_tool("iphone_wait", {"ms": 0})
             rejected = await session.call_tool("iphone_tap", {"x": 100, "y": 0.5})
             assert initialized.model_dump(by_alias=True)["protocolVersion"] == "2024-11-05"
-            assert len(tools.tools) == 9
+            assert len(tools.tools) == 11
             assert waited.model_dump(by_alias=True)["isError"] is False
             assert rejected.model_dump(by_alias=True)["isError"] is True

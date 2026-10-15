@@ -55,7 +55,10 @@ PNG on failure. No continuous capture stream is maintained. Resizing requests
 an exact width, so a source narrower than the requested width can be upscaled.
 
 Touch uses repeated initial contact and a short flush interval. Keyboard input
-uses separate modifier reports and a US ASCII mapping. Touch, keyboard, and
+uses separate modifier reports and a US ASCII mapping. Other text is set on
+the device pasteboard (one request per pasteboard connection, as the daemon
+answers only one) and pasted with Command-V; text previously on the pasteboard
+is put back afterwards. Touch, keyboard, and
 button releases are attempted in `finally` blocks. These timings are device
 integration heuristics, not platform guarantees; hardware validation remains
 necessary. A disconnected device may never receive a final release report.

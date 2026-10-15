@@ -80,10 +80,12 @@ published limits are rejected before any device operation.
 | `iphone_screenshot` | `max_width`: 200–1400, default 900 | Returns a JPEG resized to the requested width; falls back to PNG if conversion fails |
 | `iphone_tap` | Required `x`, `y`; `hold_ms`: 0–10000, default 120 | Touch and release; contact lasts at least 100 ms |
 | `iphone_swipe` | Required `x`, `y`, `x1`, `y1`; `ms`: 120–10000, default 300 | Interpolated drag; requested duration excludes contact and flush delays |
-| `iphone_type` | Required `text`: 1–1000 characters | Printable ASCII, tab, and newline using a US keyboard mapping; rejects unsupported characters before typing |
+| `iphone_type` | Required `text`: 1–1000 characters | Printable ASCII, tab, and newline are typed with a US keyboard mapping. Any other text (accents, emoji, other scripts) is pasted: it is placed on the device pasteboard, Command-V is pressed, and the previous pasteboard is restored if it held text |
 | `iphone_button` | Required `name` | `home`, `lock`, `volume-up`, `volume-down`, `mute`, or `siri` |
 | `iphone_open_app` | Required `app`: 1–255 characters | Exact bundle ID, exact display name, or unique partial name; ambiguous matches are rejected |
 | `iphone_list_apps` | Optional `contains`: up to 255 characters | Lists app names and bundle IDs; filter matches either field |
+| `iphone_list_devices` | None | Every attached device: UDID, transports, iOS version, model, Developer Mode, wireless connections, and whether it meets the preconditions to be driven; opens no tunnel and omits device names |
+| `iphone_wifi_connections` | `enabled`: boolean, default true | Allows or forbids network connections to the selected device; run once over USB |
 | `iphone_wait` | `ms`: 0–10000, default 500 | Waits before the next operation |
 
 Example arguments:
@@ -164,7 +166,7 @@ private information. See [SECURITY.md](SECURITY.md) before sharing a report.
 | Multiple devices found | Set `IOS_CONTROL_UDID` explicitly. |
 | Developer service or tunnel error | Confirm developer services are ready, check upstream setup requirements, and restart the client after fixing the connection. |
 | Input completes but nothing changes | Confirm focus, normalized coordinates, keyboard layout, and absence of a blocking system dialog. |
-| Typing rejects text | Use printable ASCII, tab, or newline. Unsupported text is rejected as a whole. |
+| Pasted text does not appear | The focused field must accept pasting. Fields that block it, such as some password or code fields, stay empty. |
 | App name is ambiguous | Use the exact bundle ID returned by `iphone_list_apps`. |
 | Device action times out | Inspect the current screen before retrying; the action may already have partly completed. |
 | Client cannot start the server | Check its absolute executable path and environment variables. Inspect stderr locally; redact before sharing. |

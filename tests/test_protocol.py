@@ -52,7 +52,7 @@ def test_stdio_initialization_tools_and_ping():
     assert result.stderr == b""
     assert len(replies) == 3
     assert replies[0]["result"]["protocolVersion"] == server.DEFAULT_PROTOCOL
-    assert len(replies[1]["result"]["tools"]) == 9
+    assert len(replies[1]["result"]["tools"]) == 11
     assert all("handler" not in tool for tool in replies[1]["result"]["tools"])
     assert replies[2] == {"jsonrpc": "2.0", "id": 3, "result": {}}
 
@@ -118,6 +118,9 @@ def test_notification_never_executes_tool(monkeypatch, replies):
         ("iphone_wait", {"ms": 10001}),
         ("iphone_wait", {"ms": -1}),
         ("iphone_status", {"extra": True}),
+        ("iphone_wifi_connections", {"enabled": 1}),
+        ("iphone_wifi_connections", {"enabled": "true"}),
+        ("iphone_list_devices", {"udid": "x"}),
         ("iphone_status", []),
         ("iphone_status", None),
     ],
