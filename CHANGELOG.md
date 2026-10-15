@@ -35,6 +35,13 @@
 - English installation, security, architecture, contribution, and hardware
   validation documentation.
 
+### Hardware validation
+
+- Commit 7d098fe, macOS 27.0.1, Python 3.14.6, pymobiledevice3 11.23.0,
+  iPad16,6 on iOS 26.7.1 over Network: `iphone_list_devices`, screenshots,
+  keyboard typing, pasting accented text, emoji and CJK into Notes, and
+  pasteboard restoration of a known text value.
+
 ### Compatibility notes
 
 - Inputs that were previously coerced, ignored, or silently truncated can now
