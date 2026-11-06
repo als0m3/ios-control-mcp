@@ -211,6 +211,74 @@ async def test_touch_releases_after_failure(monkeypatch):
     assert service.send_touchscreen.call_args.args[0] == TOUCHSCREEN_STATE_RELEASE
 
 
+async def test_multi_tap_sends_taps_in_one_session(monkeypatch):
+    from pymobiledevice3.remote.core_device.hid_service import (
+        TOUCHSCREEN_STATE_CONTACT,
+        TOUCHSCREEN_STATE_RELEASE,
+    )
+
+    service = SimpleNamespace(send_touchscreen=AsyncMock(return_value=None))
+    sessions = []
+
+    async def with_service(factory, action):
+        sessions.append(factory)
+        return await action(service)
+
+    monkeypatch.setattr(server, "_with_service", with_service)
+    for name in ("GESTURE_FLUSH_S", "CONTACT_REPEAT_DELAY_S", "MULTI_TAP_GAP_S"):
+        monkeypatch.setattr(server, name, 0)
+    await server._multi_tap(100, 200, 3)
+    states = [call.args[0] for call in service.send_touchscreen.call_args_list]
+    assert len(sessions) == 1
+    assert states.count(TOUCHSCREEN_STATE_RELEASE) == 3
+    assert states.count(TOUCHSCREEN_STATE_CONTACT) == 6
+    assert states[-1] == TOUCHSCREEN_STATE_RELEASE
+
+
+async def test_multi_tap_releases_after_failure(monkeypatch):
+    from pymobiledevice3.remote.core_device.hid_service import TOUCHSCREEN_STATE_RELEASE
+
+    service = SimpleNamespace(send_touchscreen=AsyncMock(side_effect=[OSError(), None]))
+
+    async def with_service(factory, action):
+        return await action(service)
+
+    monkeypatch.setattr(server, "_with_service", with_service)
+    monkeypatch.setattr(server, "GESTURE_FLUSH_S", 0)
+    with pytest.raises(OSError):
+        await server._multi_tap(100, 200, 2)
+    assert service.send_touchscreen.call_args.args[0] == TOUCHSCREEN_STATE_RELEASE
+
+
+def test_key_combinations_are_parsed():
+    from pymobiledevice3.remote.core_device.hid_service import ASCII_TO_HID
+
+    combos, chords = server._parse_key_combinations(" cmd+a , CMD+C,shift+tab,return,left ")
+    assert combos == ["cmd+a", "CMD+C", "shift+tab", "return", "left"]
+    assert chords[0] == [server.KEY_LEFT_GUI, ASCII_TO_HID["a"][0]]
+    assert chords[1] == [server.KEY_LEFT_GUI, ASCII_TO_HID["c"][0]]
+    assert chords[2] == [server.KEY_LEFT_SHIFT, server.KEY_NAMED["tab"]]
+    assert chords[3] == [server.KEY_NAMED["return"]]
+    assert chords[4] == [server.KEY_NAMED["left"]]
+
+
+@pytest.mark.parametrize(
+    "keys",
+    ["", " , ", "cmd+", "+a", "hyper+a", "cmd+nosuchkey", ",".join(["a"] * 21)],
+)
+def test_bad_key_combinations_are_rejected(keys):
+    with pytest.raises(server.DeviceError):
+        server._parse_key_combinations(keys)
+
+
+def test_bad_key_input_sends_nothing(monkeypatch):
+    sent = []
+    monkeypatch.setattr(server, "_run", lambda coro, timeout=None: sent.append(coro))
+    with pytest.raises(server.DeviceError):
+        server.tool_key({"keys": "cmd+a, cmd+nosuchkey"})
+    assert sent == []
+
+
 async def test_button_releases_after_failure(monkeypatch):
     from pymobiledevice3.remote.core_device.hid_service import HID_BUTTON_STATE_UP
 

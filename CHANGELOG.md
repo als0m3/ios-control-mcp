@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `iphone_tap_multi` sends a double or triple tap at one point in a single HID
+  session, so word and paragraph selection work. Separate `iphone_tap` calls are
+  too far apart to register as one gesture.
+- `iphone_key` presses hardware-keyboard shortcuts in order, such as
+  `cmd+a, cmd+c`, `shift+tab`, `return`, or arrow keys. Every combination is
+  parsed before any key is sent, and modifiers are released between chords.
+
 ## 1.1.0
 
 ### Fixed

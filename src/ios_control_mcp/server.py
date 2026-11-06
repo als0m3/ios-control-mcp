@@ -64,6 +64,8 @@ DIGITIZER_MAX = 65535
 #: A lone touch report is discarded by the digitizer as a spurious reading, so
 #: the initial contact is always sent twice.
 CONTACT_REPEAT_DELAY_S = 0.045
+#: Gap between the taps of a double or triple tap.
+MULTI_TAP_GAP_S = 0.09
 #: Closing the HID service immediately after the release cancels the gesture
 #: before it reaches the phone.
 GESTURE_FLUSH_S = 0.25
@@ -404,6 +406,100 @@ async def _touch_path(points: list[tuple[int, int]], hold_s: float) -> None:
     await _with_service(UniversalHIDServiceService, play)
 
 
+async def _multi_tap(x: int, y: int, count: int) -> None:
+    """Send ``count`` quick taps at one point in a single HID session."""
+    from pymobiledevice3.remote.core_device.hid_service import (
+        DIGITIZER_SURFACE_MAIN_TOUCHSCREEN,
+        TOUCHSCREEN_STATE_CONTACT,
+        TOUCHSCREEN_STATE_RELEASE,
+        UniversalHIDServiceService,
+    )
+
+    async def play(service):
+        async def send(state) -> None:
+            await _maybe(
+                service.send_touchscreen(state, x, y, service_id=DIGITIZER_SURFACE_MAIN_TOUCHSCREEN)
+            )
+
+        async def release():
+            await send(TOUCHSCREEN_STATE_RELEASE)
+            await asyncio.sleep(GESTURE_FLUSH_S)
+
+        async with _release_input(release):
+            for index in range(count):
+                if index:
+                    await send(TOUCHSCREEN_STATE_RELEASE)
+                    await asyncio.sleep(MULTI_TAP_GAP_S)
+                await send(TOUCHSCREEN_STATE_CONTACT)
+                await asyncio.sleep(CONTACT_REPEAT_DELAY_S)
+                await send(TOUCHSCREEN_STATE_CONTACT)
+                await asyncio.sleep(0.03)
+
+    await _with_service(UniversalHIDServiceService, play)
+
+
+#: Modifier names accepted by iphone_key, as HID usage codes.
+KEY_MODIFIERS = {
+    "cmd": 0xE3,
+    "command": 0xE3,
+    "shift": 0xE1,
+    "ctrl": 0xE0,
+    "control": 0xE0,
+    "alt": 0xE2,
+    "option": 0xE2,
+}
+#: Named non-printing keys accepted by iphone_key.
+KEY_NAMED = {
+    "return": 0x28,
+    "enter": 0x28,
+    "escape": 0x29,
+    "esc": 0x29,
+    "delete": 0x2A,
+    "backspace": 0x2A,
+    "tab": 0x2B,
+    "space": 0x2C,
+    "right": 0x4F,
+    "left": 0x50,
+    "down": 0x51,
+    "up": 0x52,
+}
+MAX_KEY_COMBINATIONS = 20
+
+
+def _parse_chord(combo: str) -> list[int]:
+    """Turn ``cmd+shift+a`` style text into HID usage codes."""
+    from pymobiledevice3.remote.core_device.hid_service import ASCII_TO_HID
+
+    parts = [part.strip().lower() for part in combo.split("+")]
+    if any(not part for part in parts):
+        raise DeviceError("Bad key combination. Use forms such as cmd+a, shift+tab, return.")
+    *modifiers, key = parts
+    codes = []
+    for modifier in modifiers:
+        if modifier not in KEY_MODIFIERS:
+            raise DeviceError("Unknown modifier. Use cmd, shift, ctrl or alt.")
+        if KEY_MODIFIERS[modifier] not in codes:
+            codes.append(KEY_MODIFIERS[modifier])
+    if key in KEY_NAMED:
+        codes.append(KEY_NAMED[key])
+    elif len(key) == 1 and key in ASCII_TO_HID:
+        usage, needs_shift = ASCII_TO_HID[key]
+        if needs_shift and KEY_LEFT_SHIFT not in codes:
+            codes.insert(0, KEY_LEFT_SHIFT)
+        codes.append(usage)
+    else:
+        raise DeviceError("Unknown key in combination.")
+    return codes
+
+
+def _parse_key_combinations(keys: str) -> tuple[list[str], list[list[int]]]:
+    combos = [combo.strip() for combo in keys.split(",") if combo.strip()]
+    if not combos or len(combos) > MAX_KEY_COMBINATIONS:
+        raise DeviceError(f"Give 1 to {MAX_KEY_COMBINATIONS} comma-separated key combinations.")
+    # Parse everything before sending anything, so bad input presses no keys.
+    return combos, [_parse_chord(combo) for combo in combos]
+
+
 async def _send_keys(chords: list[list[int]]) -> None:
     """Press each chord in turn, releasing every key between chords."""
     from pymobiledevice3.remote.core_device.hid_service import UniversalHIDServiceService
@@ -637,6 +733,20 @@ def tool_tap(arguments: dict) -> list[dict]:
     return _text({"ok": True, "action": "tap"})
 
 
+def tool_tap_multi(arguments: dict) -> list[dict]:
+    x = _to_digitizer(arguments["x"], "x")
+    y = _to_digitizer(arguments["y"], "y")
+    count = int(arguments.get("count", 2))
+    _run(_multi_tap(x, y, count))
+    return _text({"ok": True, "action": "multi_tap", "count": count})
+
+
+def tool_key(arguments: dict) -> list[dict]:
+    combos, chords = _parse_key_combinations(arguments["keys"])
+    _run(_send_keys(chords), timeout=CALL_TIMEOUT_S + len(chords) * 0.2)
+    return _text({"ok": True, "action": "key", "keys": combos})
+
+
 def tool_swipe(arguments: dict) -> list[dict]:
     x0, y0 = _to_digitizer(arguments["x"], "x"), _to_digitizer(arguments["y"], "y")
     x1, y1 = _to_digitizer(arguments["x1"], "x1"), _to_digitizer(arguments["y1"], "y1")
@@ -793,6 +903,51 @@ TOOLS = [
             "additionalProperties": False,
         },
         "handler": tool_tap,
+    },
+    {
+        "name": "iphone_tap_multi",
+        "description": (
+            "Double or triple tap at one point, normalised 0.0-1.0, as one quick gesture. "
+            "A double tap usually selects a word and a triple tap a paragraph."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "x": NORMALISED,
+                "y": NORMALISED,
+                "count": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "maximum": 3,
+                    "description": "Number of taps (default 2).",
+                },
+            },
+            "required": ["x", "y"],
+            "additionalProperties": False,
+        },
+        "handler": tool_tap_multi,
+    },
+    {
+        "name": "iphone_key",
+        "description": (
+            "Press hardware-keyboard shortcuts in order, for example 'cmd+a, cmd+c', "
+            "'shift+tab', 'return', 'escape' or 'left'. Modifiers: cmd, shift, ctrl, alt. "
+            "Shortcuts act on the focused app; avoid keys that would submit data."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "keys": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 400,
+                    "description": "Comma-separated key combinations, pressed in order.",
+                }
+            },
+            "required": ["keys"],
+            "additionalProperties": False,
+        },
+        "handler": tool_key,
     },
     {
         "name": "iphone_swipe",

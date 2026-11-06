@@ -10,13 +10,15 @@ version, device model, and transport. Do not record device names, serials, UDIDs
 pairing records, or screenshots of personal data.
 
 1. Connect over USB, unlock, trust the Mac, and enable Developer Mode.
-2. Initialize through an MCP client and confirm all eleven tools are listed.
+2. Initialize through an MCP client and confirm all thirteen tools are listed.
 3. Read status and verify it matches the intended phone without exposing its name
    or UDID. With two devices, confirm selection requires `IOS_CONTROL_UDID`.
 4. Capture the screen at widths 200, 900, and 1400. Check MIME type, readable
    content, orientation, and absence of persistent image artifacts.
 5. In a harmless test app, tap a known target and scroll in both directions.
-   Verify a long press and inspect the screen after every input action.
+   Verify a long press and inspect the screen after every input action. Double tap
+   a word in a disposable text field and confirm it is selected; then press
+   `cmd+a, cmd+c` with `iphone_key` and confirm the text is selected and copied.
 6. Type `Aa1! zZ9?` in a disposable text field. Verify case, punctuation, and that
    Shift is released. Test tab and newline only where they cannot submit data.
    Confirm unsupported Unicode is rejected without typing a partial prefix.
