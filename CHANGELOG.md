@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Keep a held touch alive: `iphone_tap` with `hold_ms` now repeats the contact
+  sample every 16 ms instead of going silent until release, so iOS no longer
+  ends the contact early and long presses no longer register as plain taps.
+  The call timeout also grows with `hold_ms`.
+
 ## 1.1.0
 
 ### Fixed

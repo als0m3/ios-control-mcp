@@ -16,7 +16,9 @@ pairing records, or screenshots of personal data.
 4. Capture the screen at widths 200, 900, and 1400. Check MIME type, readable
    content, orientation, and absence of persistent image artifacts.
 5. In a harmless test app, tap a known target and scroll in both directions.
-   Verify a long press and inspect the screen after every input action.
+   Verify a long press (`hold_ms` of 1000 or more on a Home Screen icon should open
+   its quick-actions menu, not launch the app) and inspect the screen after every
+   input action.
 6. Type `Aa1! zZ9?` in a disposable text field. Verify case, punctuation, and that
    Shift is released. Test tab and newline only where they cannot submit data.
    Confirm unsupported Unicode is rejected without typing a partial prefix.

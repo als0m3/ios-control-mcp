@@ -78,7 +78,7 @@ published limits are rejected before any device operation.
 | --- | --- | --- |
 | `iphone_status` | None | iOS version, build, model, available transports, tunnel state; omits the device name and UDID |
 | `iphone_screenshot` | `max_width`: 200–1400, default 900 | Returns a JPEG resized to the requested width; falls back to PNG if conversion fails |
-| `iphone_tap` | Required `x`, `y`; `hold_ms`: 0–10000, default 120 | Touch and release; contact lasts at least 100 ms |
+| `iphone_tap` | Required `x`, `y`; `hold_ms`: 0–10000, default 120 | Touch and release; contact lasts at least 100 ms and keeps reporting while held, so long presses register |
 | `iphone_swipe` | Required `x`, `y`, `x1`, `y1`; `ms`: 120–10000, default 300 | Interpolated drag; requested duration excludes contact and flush delays |
 | `iphone_type` | Required `text`: 1–1000 characters | Printable ASCII, tab, and newline are typed with a US keyboard mapping. Any other text (accents, emoji, other scripts) is pasted: it is placed on the device pasteboard, Command-V is pressed, and the previous pasteboard is restored if it held text |
 | `iphone_button` | Required `name` | `home`, `lock`, `volume-up`, `volume-down`, `mute`, or `siri` |

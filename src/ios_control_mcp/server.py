@@ -64,6 +64,9 @@ DIGITIZER_MAX = 65535
 #: A lone touch report is discarded by the digitizer as a spurious reading, so
 #: the initial contact is always sent twice.
 CONTACT_REPEAT_DELAY_S = 0.045
+#: A finger resting on the glass keeps reporting; iOS ends a silent contact
+#: early, so a held touch repeats its contact sample at this interval.
+HOLD_SAMPLE_S = 0.016
 #: Closing the HID service immediately after the release cancels the gesture
 #: before it reaches the phone.
 GESTURE_FLUSH_S = 0.25
@@ -363,6 +366,19 @@ async def _release_input(release):
         await release()
 
 
+async def _hold_contact(contact, x: int, y: int, hold_s: float) -> None:
+    """Keep a touch alive for ``hold_s`` by repeating its contact sample."""
+    loop = asyncio.get_running_loop()
+    hold_until = loop.time() + hold_s
+    while True:
+        remaining = hold_until - loop.time()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(HOLD_SAMPLE_S, remaining))
+        if loop.time() < hold_until:
+            await contact(x, y)
+
+
 async def _touch_path(points: list[tuple[int, int]], hold_s: float) -> None:
     from pymobiledevice3.remote.core_device.hid_service import (
         DIGITIZER_SURFACE_MAIN_TOUCHSCREEN,
@@ -396,7 +412,7 @@ async def _touch_path(points: list[tuple[int, int]], hold_s: float) -> None:
             await contact(last_x, last_y)
             await asyncio.sleep(CONTACT_REPEAT_DELAY_S)
             await contact(last_x, last_y)
-            await asyncio.sleep(max(hold_s, 0.10))
+            await _hold_contact(contact, last_x, last_y, max(hold_s, 0.10))
             for last_x, last_y in points[1:]:
                 await contact(last_x, last_y)
                 await asyncio.sleep(0.016)
@@ -633,7 +649,7 @@ def tool_tap(arguments: dict) -> list[dict]:
     x = _to_digitizer(arguments["x"], "x")
     y = _to_digitizer(arguments["y"], "y")
     hold_s = float(arguments.get("hold_ms", 120)) / 1000.0
-    _run(_touch_path([(x, y)], hold_s))
+    _run(_touch_path([(x, y)], hold_s), timeout=CALL_TIMEOUT_S + hold_s)
     return _text({"ok": True, "action": "tap"})
 
 

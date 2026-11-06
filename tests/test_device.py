@@ -211,6 +211,41 @@ async def test_touch_releases_after_failure(monkeypatch):
     assert service.send_touchscreen.call_args.args[0] == TOUCHSCREEN_STATE_RELEASE
 
 
+async def test_held_touch_keeps_reporting_contact(monkeypatch):
+    from pymobiledevice3.remote.core_device.hid_service import (
+        TOUCHSCREEN_STATE_CONTACT,
+        TOUCHSCREEN_STATE_RELEASE,
+    )
+
+    service = SimpleNamespace(send_touchscreen=AsyncMock(return_value=None))
+
+    async def with_service(factory, action):
+        return await action(service)
+
+    monkeypatch.setattr(server, "_with_service", with_service)
+    monkeypatch.setattr(server, "GESTURE_FLUSH_S", 0)
+    monkeypatch.setattr(server, "CONTACT_REPEAT_DELAY_S", 0)
+    monkeypatch.setattr(server, "HOLD_SAMPLE_S", 0.01)
+    await server._touch_path([(100, 200)], 0.2)
+    states = [call.args[0] for call in service.send_touchscreen.call_args_list]
+    assert states[-1] == TOUCHSCREEN_STATE_RELEASE
+    # Two initial contacts plus repeated samples for the whole hold, not silence.
+    assert states.count(TOUCHSCREEN_STATE_CONTACT) >= 10
+    assert all(call.args[1:3] == (100, 200) for call in service.send_touchscreen.call_args_list)
+
+
+def test_long_hold_extends_call_timeout(monkeypatch):
+    seen = {}
+
+    def run(coro, timeout=None):
+        coro.close()
+        seen["timeout"] = timeout
+
+    monkeypatch.setattr(server, "_run", run)
+    server.tool_tap({"x": 0.5, "y": 0.5, "hold_ms": 10000})
+    assert seen["timeout"] >= server.CALL_TIMEOUT_S + 10
+
+
 async def test_button_releases_after_failure(monkeypatch):
     from pymobiledevice3.remote.core_device.hid_service import HID_BUTTON_STATE_UP
 
